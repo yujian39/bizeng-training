@@ -1,0 +1,9 @@
+# Python build tools — not needed for the web app
+tools/
+
+# Raw data sources — bundled into js/data.js
+data/
+
+# Python cache
+__pycache__/
+*.pyc
