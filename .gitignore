@@ -1,8 +1,7 @@
-# Python build tools â€” source files excluded, check-inline.js is used by check.bat
+# Python build tools â€?source files excluded, check-inline.js is used by check.bat
 tools/
-!tools/check-inline.js
 
-# Raw data sources â€” bundled into js/data.js
+# Raw data sources â€?bundled into js/data.js
 data/
 
 # Python cache
