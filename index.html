@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -165,12 +165,12 @@ body{font-family:"Segoe UI","Microsoft YaHei",sans-serif;font-size:15px;color:va
       <div id="sceneNav"></div>
     </div>
     <div class="nav-sec">
-      <div class="nav-hd" style="cursor:default;color:var(--tx2);font-weight:500;font-size:13px">🔤 词汇总库</div>
-      <div class="nav-hd" style="cursor:default;color:var(--tx2);font-weight:500;font-size:13px">📝 语法索引</div>
-      <div class="nav-hd" style="cursor:default;color:var(--tx2);font-weight:500;font-size:13px">💬 句型速查</div>
+      <div class="nav-hd" onclick="GlobalView.show('vocabBank')" style="cursor:pointer">🔤 词汇总库</div>
+      <div class="nav-hd" onclick="GlobalView.show('grammarIndex')" style="cursor:pointer">📝 语法索引</div>
+      <div class="nav-hd" onclick="GlobalView.show('sentenceRef')" style="cursor:pointer">💬 句型速查</div>
     </div>
     <div class="nav-sec">
-      <div class="nav-hd" style="cursor:default;color:var(--tx2);font-weight:500;font-size:13px">⭐ 收藏 <span id="favBadge">(0)</span></div>
+      <div class="nav-hd" onclick="GlobalView.show('favorites')" style="cursor:pointer">⭐ 收藏 <span id="favBadge">(0)</span></div>
     </div>
   </nav>
 
@@ -225,6 +225,16 @@ body{font-family:"Segoe UI","Microsoft YaHei",sans-serif;font-size:15px;color:va
 
 <script>
 // ====== ALL APPLICATION LOGIC INLINE ======
+
+// ========== Utility ==========
+var Util = {
+  speakEn: function(text) {
+    speechSynthesis.cancel();
+    var utt = new SpeechSynthesisUtterance(text);
+    utt.lang = 'en-US'; utt.rate = 0.85;
+    speechSynthesis.speak(utt);
+  }
+};
 
 // ========== App Core ==========
 const App = {
@@ -463,7 +473,7 @@ var ReadMod = {
     var rows = '';
     for (var i = 0; i < unit.vocabulary.length; i++) {
       var v = unit.vocabulary[i];
-      rows += '<tr><td><b>' + v.en + '</b></td><td>' + (v.phonetic||'') + '</td><td>' + (v.pos||'') + '</td><td>' + (v.zh||'') + '</td></tr>';
+      rows += '<tr><td><b>' + v.en + '</b> <span onclick="event.stopPropagation();Util.speakEn(\'' + v.en.replace(/'/g,"\\'") + '\')" style="cursor:pointer;font-size:16px" title="朗读">🔊</span></td><td>' + (v.phonetic||'') + '</td><td>' + (v.pos||'') + '</td><td>' + (v.zh||'') + '</td></tr>';
     }
     return '<h3 style="margin:20px 0 12px">🔤 重点词汇 (' + unit.vocabulary.length + '个)</h3><table class="vocab-tbl"><thead><tr><th>英文</th><th>音标</th><th>词性</th><th>释义</th></tr></thead><tbody>' + rows + '</tbody></table>';
   },
@@ -481,18 +491,19 @@ var ReadMod = {
 
 // ========== Listen Module ==========
 var ListenMod = {
-  audio: null, speed: 1, mode: 'play', _sentences: [], _sentenceIdx: 0,
+  audio: null, speed: 1, mode: 'play', _sentences: [], _sentenceIdx: 0, playingKind: null,
   render: function(unit) {
     var audioPath = 'audio/' + unit.id + '-en.mp3';
     var zhPath = 'audio/' + unit.id + '-zh.mp3';
     this._sentences = (unit.dialogueEN || []).filter(function(s){ var t = (s||'').trim(); return t.length > 0; });
     this._sentenceIdx = 0;
-    this._sentenceIdx = 0;
+    if (this.audio) { this.audio.pause(); this.audio = null; }
+    this.playingKind = null;
 
     var html = '<div class="ap"><div class="ctl">' +
-      '<button class="btn-play" onclick="ListenMod.play(\'' + audioPath + '\')">▶ 播放英文</button>' +
-      '<button class="btn-play" style="background:var(--suc)" onclick="ListenMod.play(\'' + zhPath + '\')">▶ 播放中文</button>' +
-      '<button class="btn-play" style="background:var(--warn)" onclick="ListenMod.playSentence()">▶ 逐句播放</button>' +
+      '<button id="btn-en" class="btn-play" data-src="' + audioPath + '" data-kind="en" onclick="ListenMod._playById(this.id)">▶ 播放英文</button>' +
+      '<button id="btn-zh" class="btn-play" style="background:var(--suc)" data-src="' + zhPath + '" data-kind="zh" onclick="ListenMod._playById(this.id)">▶ 播放中文</button>' +
+      '<button id="btn-sent" class="btn-play" style="background:var(--warn)" onclick="ListenMod.playSentence()">▶ 逐句播放</button>' +
       '<button class="btn-spd ' + (this.speed===0.75?'active':'') + '" onclick="ListenMod.setSpeed(0.75)">0.75x</button>' +
       '<button class="btn-spd ' + (this.speed===1?'active':'') + '" onclick="ListenMod.setSpeed(1)">1x</button>' +
       '<button class="btn-spd ' + (this.speed===1.25?'active':'') + '" onclick="ListenMod.setSpeed(1.25)">1.25x</button>' +
@@ -513,19 +524,80 @@ var ListenMod = {
   },
 
   toggleMode: function() { this.mode = this.mode==='play'?'dictation':'play'; this.render(App.currentUnit); },
-  play: function(src) {
+
+  _playById: function(id) {
+    var btn = document.getElementById(id);
+    if (btn) this._playAudio(btn);
+  },
+
+  _playAudio: function(btn) {
+    var src = btn.getAttribute('data-src');
+    var kind = btn.getAttribute('data-kind');
+    if (!src) return;
+    if (this.playingKind === kind && this.audio && !this.audio.paused) {
+      this.audio.pause();
+      this._setBtnState(btn, false);
+      return;
+    }
+    if (this.playingKind === kind && this.audio && this.audio.paused) {
+      this.audio.play().catch(function(){});
+      this._setBtnState(btn, true);
+      return;
+    }
     if (this.audio) { this.audio.pause(); this.audio = null; }
+    if (this.playingKind) {
+      var oldBtn = document.getElementById('btn-' + this.playingKind);
+      if (oldBtn) this._setBtnState(oldBtn, false);
+    }
     this.audio = new Audio(src);
     this.audio.playbackRate = this.speed;
-    this.audio.play().catch(function() {});
+    this.audio.play().catch(function(){});
+    this.playingKind = kind;
+    this._setBtnState(btn, true);
     var self = this;
     this.audio.addEventListener('timeupdate', function() { self.updateProgress(); });
     this.audio.addEventListener('loadedmetadata', function() { self.updateProgress(); });
+    this.audio.addEventListener('ended', function() {
+      self._setBtnState(btn, false);
+      self.playingKind = null;
+    });
   },
+
+  _setBtnState: function(btn, playing) {
+    var kind = btn.getAttribute('data-kind');
+    if (playing) {
+      btn.textContent = '⏸ 暂停';
+      btn.style.background = '#dc2626';
+    } else {
+      if (kind === 'zh') {
+        btn.textContent = '▶ 播放中文';
+        btn.style.background = 'var(--suc)';
+      } else {
+        btn.textContent = '▶ 播放英文';
+        btn.style.background = '';
+      }
+    }
+  },
+
   playSentence: function(idx) {
+    var sb = document.getElementById('btn-sent');
+    if (this.playingKind === 'sent') {
+      speechSynthesis.cancel();
+      this.playingKind = null;
+      if (sb) { sb.textContent = '▶ 逐句播放'; sb.style.background = 'var(--warn)'; }
+      return;
+    }
     if (idx != null) this._sentenceIdx = idx;
+    this.playingKind = 'sent';
+    if (sb) { sb.textContent = '⏹ 停止'; sb.style.background = '#dc2626'; }
     var utt = new SpeechSynthesisUtterance(this._sentences[this._sentenceIdx]);
     utt.lang = 'en-US'; utt.rate = this.speed;
+    var self = this;
+    utt.onend = function() {
+      self.playingKind = null;
+      var b = document.getElementById('btn-sent');
+      if (b) { b.textContent = '▶ 逐句播放'; b.style.background = 'var(--warn)'; }
+    };
     speechSynthesis.cancel(); speechSynthesis.speak(utt);
     this._sentenceIdx = (this._sentenceIdx + 1) % this._sentences.length;
   },
@@ -555,7 +627,6 @@ var ListenMod = {
     document.getElementById('dictResult').innerHTML = '<p>准确率: <b style="font-size:20px;color:var(--pri)">' + acc + '%</b> (' + match + '/' + orig.length + ')</p><p>' + html + '</p>';
   }
 };
-
 // ========== Speak Module ==========
 var SpeakMod = {
   recognition: null, isRecording: false,
@@ -637,7 +708,7 @@ var VocabMod = {
     if (v.length) {
       html += '<h4 style="margin:16px 0 8px">🃏 词汇闪卡 (点击翻转)</h4><div class="flash-grid">';
       for (var i = 0; i < Math.min(v.length, 12); i++) {
-        html += '<div class="flash" onclick="this.classList.toggle(\'flipped\')"><div class="flash-inner"><div class="flash-front"><div class="wd">' + v[i].en + '</div><div class="ph">' + (v[i].phonetic||'') + '</div></div><div class="flash-back"><div class="mn">' + v[i].zh + '</div><div style="font-size:12px;color:var(--tx2);margin-top:4px">' + (v[i].pos||'') + '</div></div></div></div>';
+        html += '<div class="flash" onclick="this.classList.toggle(\'flipped\')"><div class="flash-inner"><div class="flash-front"><div class="wd">' + v[i].en + '</div><span onclick="event.stopPropagation();Util.speakEn(\'' + v[i].en.replace(/'/g,"\\'") + '\')" style="cursor:pointer;font-size:18px" title="朗读">🔊</span><div class="ph">' + (v[i].phonetic||'') + '</div></div><div class="flash-back"><div class="mn">' + v[i].zh + '</div><div style="font-size:12px;color:var(--tx2);margin-top:4px">' + (v[i].pos||'') + '</div></div></div></div>';
       }
       html += '</div>';
     }
@@ -890,6 +961,158 @@ var QuizMod = {
     document.getElementById('quizResult').innerHTML =
       '<div class="quiz-final"><div class="big" style="color:' + (this.score>=80?'var(--suc)':this.score>=60?'var(--warn)':'var(--err)') + '">' + this.score + '</div><div class="msg">' + scoreText + '</div><p style="color:var(--tx2)">' + correct + '/' + total + ' 题正确</p></div>' + reviewHtml +
       '<div style="text-align:center;margin-top:16px"><button class="btn btn-pri" onclick="QuizMod.render(App.currentUnit)">🔄 重新测验</button></div>';
+  }
+};
+
+// ========== Global Views (侧边栏：词汇总库/语法索引/句型速查/收藏) ==========
+var GlobalView = {
+  current: null,
+
+  show: function(view) {
+    this.current = view;
+    App.currentUnit = null;
+    document.querySelectorAll('.nav-item').forEach(function(el) { el.classList.remove('active'); });
+    document.getElementById('sceneTitle').textContent = {
+      vocabBank: '🔤 词汇总库', grammarIndex: '📝 语法索引',
+      sentenceRef: '💬 句型速查', favorites: '⭐ 我的收藏'
+    }[view] || '';
+    document.getElementById('sceneMeta').style.display = 'none';
+
+    switch(view) {
+      case 'vocabBank': this.renderVocabBank(); break;
+      case 'grammarIndex': this.renderGrammarIndex(); break;
+      case 'sentenceRef': this.renderSentenceRef(); break;
+      case 'favorites': this.renderFavorites(); break;
+    }
+  },
+
+  renderVocabBank: function() {
+    var seen = {};
+    var allVocab = [];
+    App.units.forEach(function(u) {
+      (u.vocabulary || []).forEach(function(v) {
+        var key = (v.en || '').toLowerCase();
+        if (!seen[key]) { seen[key] = true; allVocab.push(v); }
+      });
+    });
+    allVocab.sort(function(a,b) { return (a.en||'').localeCompare(b.en||''); });
+
+    var rows = allVocab.map(function(v) {
+      return '<tr><td><b>' + v.en + '</b> <span onclick="event.stopPropagation();Util.speakEn(\'' + v.en.replace(/'/g,"\\'") + '\')" style="cursor:pointer;font-size:16px" title="朗读">🔊</span></td><td>' + (v.phonetic||'') + '</td><td>' + (v.pos||'') + '</td><td>' + (v.zh||'') + '</td></tr>';
+    }).join('');
+
+    var html = '<h3>🔤 词汇总库 <small style="color:var(--tx2);font-weight:400">(' + allVocab.length + '个词汇，跨82个场景)</small></h3>';
+    html += '<div style="margin-bottom:12px"><input type="text" id="vocabSearch" placeholder="🔍 搜索词汇..." style="padding:8px 14px;border:2px solid var(--bd);border-radius:20px;width:300px;font-size:14px" oninput="GlobalView.filterVocab()"></div>';
+    html += '<table class="vocab-tbl" id="vocabTbl"><thead><tr><th>英文</th><th>音标</th><th>词性</th><th>释义</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    document.getElementById('modContent').innerHTML = html;
+  },
+
+  filterVocab: function() {
+    var q = (document.getElementById('vocabSearch').value || '').toLowerCase();
+    var rows = document.querySelectorAll('#vocabTbl tbody tr');
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].style.display = rows[i].textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+    }
+  },
+
+  renderGrammarIndex: function() {
+    var items = [];
+    App.units.forEach(function(u) {
+      (u.grammar || []).forEach(function(g) {
+        items.push({ title: g.title, structure: g.structure, example: g.example, explanation: g.explanation, practice: g.practice, unitId: u.id, unitTitle: u.title });
+      });
+    });
+
+    var html = '<h3>📝 语法索引 <small style="color:var(--tx2);font-weight:400">(' + items.length + '条语法点)</small></h3>';
+    var group = {};
+    items.forEach(function(g) {
+      if (!group[g.title]) group[g.title] = [];
+      group[g.title].push(g);
+    });
+    var titles = Object.keys(group).sort();
+
+    html += '<div style="margin-bottom:12px"><input type="text" id="gramSearch" placeholder="🔍 搜索语法..." style="padding:8px 14px;border:2px solid var(--bd);border-radius:20px;width:300px;font-size:14px" oninput="GlobalView.filterGrammar()"></div>';
+
+    titles.forEach(function(title) {
+      var entries = group[title];
+      html += '<div class="gram-card" data-searchable="true">';
+      html += '<h4>' + title + ' <small style="color:var(--tx2);font-weight:400">(' + entries.length + '次出现)</small></h4>';
+      html += '<div class="struc">' + entries[0].structure + '</div>';
+      if (entries[0].example) html += '<div class="eg">📌 ' + entries[0].example + '</div>';
+      if (entries[0].explanation) html += '<div class="expl">📖 ' + entries[0].explanation + '</div>';
+      if (entries[0].practice) html += '<div class="prac">✏️ ' + entries[0].practice + '</div>';
+      html += '<div style="margin-top:6px;font-size:12px;color:var(--tx2)">来源: 场景 ' + entries[0].unitId + ' ' + entries[0].unitTitle + '</div>';
+      html += '</div>';
+    });
+
+    document.getElementById('modContent').innerHTML = html;
+  },
+
+  filterGrammar: function() {
+    var q = (document.getElementById('gramSearch').value || '').toLowerCase();
+    var cards = document.querySelectorAll('[data-searchable]');
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].style.display = cards[i].textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+    }
+  },
+
+  renderSentenceRef: function() {
+    var all = [];
+    App.units.forEach(function(u) {
+      (u.coreSentences || []).forEach(function(s) {
+        all.push({ original: s.original, func: s.function || '', alt: s.alternative || '', unitId: u.id, unitTitle: u.title });
+      });
+    });
+
+    // Group by function
+    var group = {};
+    all.forEach(function(s) {
+      var key = s.func || '其他';
+      if (!group[key]) group[key] = [];
+      group[key].push(s);
+    });
+    var keys = Object.keys(group).sort();
+
+    var html = '<h3>💬 句型速查 <small style="color:var(--tx2);font-weight:400">(' + all.length + '个句型，来自82个场景)</small></h3>';
+    html += '<div style="margin-bottom:12px"><input type="text" id="sentSearch" placeholder="🔍 搜索句型..." style="padding:8px 14px;border:2px solid var(--bd);border-radius:20px;width:300px;font-size:14px" oninput="GlobalView.filterSentence()"></div>';
+
+    keys.forEach(function(func) {
+      html += '<h4 style="margin:20px 0 8px;color:var(--pri)">📌 ' + func + ' (' + group[func].length + '句)</h4>';
+      group[func].forEach(function(s) {
+        html += '<div class="sent-card" data-searchable="true">';
+        html += '<div class="orig">"' + s.original + '"</div>';
+        html += '<div class="alt" style="margin-top:4px">🔄 ' + s.alt + '</div>';
+        html += '<div style="font-size:12px;color:var(--tx2);margin-top:3px">来源: 场景 ' + s.unitId + ' ' + s.unitTitle + '</div>';
+        html += '</div>';
+      });
+    });
+
+    document.getElementById('modContent').innerHTML = html;
+  },
+
+  filterSentence: function() {
+    var q = (document.getElementById('sentSearch').value || '').toLowerCase();
+    var cards = document.querySelectorAll('[data-searchable]');
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].style.display = cards[i].textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+    }
+  },
+
+  renderFavorites: function() {
+    var favUnits = App.units.filter(function(u) { return App.favorites.indexOf(u.id) >= 0; });
+    if (!favUnits.length) {
+      document.getElementById('modContent').innerHTML = '<div class="welcome"><h1>⭐ 还没有收藏</h1><p style="color:var(--tx2)">在场景页点击右上角的 ⭐ 收藏 即可添加到此处。</p></div>';
+      return;
+    }
+    var html = '<h3>⭐ 我的收藏 <small style="color:var(--tx2);font-weight:400">(' + favUnits.length + '个场景)</small></h3>';
+    favUnits.forEach(function(u) {
+      html += '<div class="di-card" style="cursor:pointer;border-left-color:var(--warn)" onclick="App.selectUnit(' + u.id + ')">';
+      html += '<div class="en-txt" style="font-weight:600">场景 ' + u.id + ': ' + u.title + '</div>';
+      html += '<div class="zh-txt">' + (u.dialogueEN && u.dialogueEN[0] || '') + '</div>';
+      html += '<div style="font-size:12px;color:var(--tx2);margin-top:4px">' + u.roles.A + ' ↔ ' + u.roles.B + ' · ' + (u.difficulty||'') + '</div>';
+      html += '</div>';
+    });
+    document.getElementById('modContent').innerHTML = html;
   }
 };
 
