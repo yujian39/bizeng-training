@@ -104,7 +104,7 @@ body{font-family:"Segoe UI","Microsoft YaHei",sans-serif;font-size:15px;color:va
 .fill-q .btn-chk{margin-left:8px;padding:8px 16px;border:none;background:var(--pri);color:#fff;border-radius:6px;cursor:pointer;font-size:13px}
 .ap{background:var(--card);border-radius:var(--r);padding:16px 20px;box-shadow:var(--sh);margin-bottom:16px}
 .ap .ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.ap button{padding:8px 16px;border:none;border-radius:20px;cursor:pointer;font-size:13px;font-weight:500}
+.ap button{padding:8px 16px;border:none;border-radius:20px;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap}
 .ap .btn-play{background:var(--pri);color:#fff}
 .ap .btn-spd{background:var(--bg);color:var(--txt);border:1px solid var(--bd)}
 .ap .btn-spd.active{background:var(--pri);color:#fff;border-color:var(--pri)}
@@ -152,7 +152,11 @@ body{font-family:"Segoe UI","Microsoft YaHei",sans-serif;font-size:15px;color:va
   #topbar{height:auto;padding:8px 12px;flex-wrap:wrap;gap:6px}
   #topbar .logo{font-size:14px}
   #main{flex-direction:column;height:auto;overflow-x:hidden}
-  #sidebar{display:none}
+  #sidebar{display:none;position:fixed;top:52px;left:0;bottom:0;width:260px;z-index:200;background:var(--card);box-shadow:2px 0 12px rgba(0,0,0,.15);overflow-y:auto;transform:translateX(-100%);transition:transform .25s ease}
+  #sidebar.open{display:block;transform:translateX(0)}
+  #sidebar-overlay{display:none;position:fixed;top:52px;left:0;right:0;bottom:0;background:rgba(0,0,0,.3);z-index:199}
+  #sidebar-overlay.show{display:block}
+  #mobileNav{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--bd);background:var(--card);border-radius:6px;cursor:pointer;font-size:14px}
   #content{padding:12px;padding-bottom:60px}
   #modbar{flex-wrap:wrap}
   #modbar .mod-tab{font-size:12px;padding:6px 4px}
@@ -182,9 +186,13 @@ body{font-family:"Segoe UI","Microsoft YaHei",sans-serif;font-size:15px;color:va
 </head>
 <body>
 <div id="topbar">
-  <div class="logo">🏢 商务英语 · 实战训练平台 (82场景)</div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <button id="mobileNav" onclick="toggleMobileNav()" style="display:none">☰ 场景</button>
+    <div class="logo">🏢 商务英语 · 实战训练平台 (82场景)</div>
+  </div>
   <div class="stats"><span id="prog-badge">📊 0/20</span><span id="quiz-badge">🎯 --</span></div>
 </div>
+<div id="sidebar-overlay" onclick="toggleMobileNav()"></div>
 
 <div id="main">
   <nav id="sidebar">
@@ -347,6 +355,11 @@ const App = {
     if (isFav) favBtn.classList.add('faved'); else favBtn.classList.remove('faved');
 
     App.showModule(App.currentMod);
+    // 移动端选场景后关闭侧边栏
+    if (window.innerWidth <= 768) {
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebar-overlay').classList.remove('show');
+    }
   },
 
   toggleFav() {
@@ -1341,8 +1354,29 @@ var GlobalView = {
   }
 };
 
+// ========== Mobile Nav ==========
+function toggleMobileNav() {
+  var sb = document.getElementById('sidebar');
+  var ov = document.getElementById('sidebar-overlay');
+  sb.classList.toggle('open');
+  ov.classList.toggle('show');
+}
+function initMobileNav() {
+  var btn = document.getElementById('mobileNav');
+  if (window.innerWidth <= 768 && btn) {
+    btn.style.display = 'inline-flex';
+  }
+  window.addEventListener('resize', function() {
+    if (btn) btn.style.display = window.innerWidth <= 768 ? 'inline-flex' : 'none';
+    if (window.innerWidth > 768) {
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebar-overlay').classList.remove('show');
+    }
+  });
+}
+
 // ========== Boot ==========
-document.addEventListener('DOMContentLoaded', function() { App.init(); });
+document.addEventListener('DOMContentLoaded', function() { App.init(); initMobileNav(); });
 </script>
 </body>
 </html>
