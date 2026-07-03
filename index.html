@@ -522,12 +522,15 @@ var ReadMod = {
 // ========== Listen Module ==========
 var ListenMod = {
   audio: null, speed: 1, mode: 'play', _sentences: [], _sentenceIdx: 0, playingKind: null,
+  _sentAudio: null, _autoAdvance: true, _unitId: null,
   render: function(unit) {
     var audioPath = 'audio/' + unit.id + '-en.mp3';
     var zhPath = 'audio/' + unit.id + '-zh.mp3';
     this._sentences = (unit.dialogueEN || []).filter(function(s){ var t = (s||'').trim(); return t.length > 0; });
     this._sentenceIdx = 0;
+    this._unitId = unit.id;
     if (this.audio) { this.audio.pause(); this.audio = null; }
+    if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
     this.playingKind = null;
 
     var html = '<div class="ap"><div class="ctl">' +
@@ -538,7 +541,9 @@ var ListenMod = {
       '<button class="btn-spd ' + (this.speed===1?'active':'') + '" onclick="ListenMod.setSpeed(1)">1x</button>' +
       '<button class="btn-spd ' + (this.speed===1.25?'active':'') + '" onclick="ListenMod.setSpeed(1.25)">1.25x</button>' +
       '<div class="bar" id="progBar" onclick="ListenMod.seek(event)"><div class="bar-fill" id="progFill"></div></div>' +
-      '<span id="timeDisplay">00:00 / 00:00</span></div></div>' +
+      '<span id="timeDisplay">00:00 / 00:00</span>' +
+      '<span style="font-size:11px;color:var(--tx2);margin-left:8px">⌨ 空格暂停 ← → 快退/快进</span>' +
+      '</div></div>' +
       '<div style="margin:12px 0"><button class="btn-out" onclick="ListenMod.toggleMode()">切换模式: ' + (this.mode==='play'?'🎧 播放':'✍️ 听写') + '</button></div>';
 
     if (this.mode === 'dictation') {
@@ -551,6 +556,7 @@ var ListenMod = {
       }
     }
     document.getElementById('modContent').innerHTML = html;
+    this._bindKeys();
   },
 
   toggleMode: function() { this.mode = this.mode==='play'?'dictation':'play'; this.render(App.currentUnit); },
@@ -564,6 +570,10 @@ var ListenMod = {
     var src = btn.getAttribute('data-src');
     var kind = btn.getAttribute('data-kind');
     if (!src) return;
+    // 如果逐句正在播放，先停掉
+    if (this.playingKind === 'sent') {
+      this._stopSentAudio();
+    }
     if (this.playingKind === kind && this.audio && !this.audio.paused) {
       this.audio.pause();
       this._setBtnState(btn, false);
@@ -611,25 +621,130 @@ var ListenMod = {
 
   playSentence: function(idx) {
     var sb = document.getElementById('btn-sent');
+    // 如果正在播放逐句，停止
     if (this.playingKind === 'sent') {
-      speechSynthesis.cancel();
-      this.playingKind = null;
-      if (sb) { sb.textContent = '▶ 逐句播放'; sb.style.background = 'var(--warn)'; }
+      this._stopSentAudio();
       return;
     }
     if (idx != null) this._sentenceIdx = idx;
-    this.playingKind = 'sent';
-    if (sb) { sb.textContent = '⏹ 停止'; sb.style.background = '#dc2626'; }
-    var utt = new SpeechSynthesisUtterance(this._sentences[this._sentenceIdx]);
-    utt.lang = 'en-US'; utt.rate = this.speed;
+    if (this._sentenceIdx >= this._sentences.length) this._sentenceIdx = 0;
+    this._playCurrentSentence();
+  },
+
+  _playCurrentSentence: function() {
     var self = this;
+    var sb = document.getElementById('btn-sent');
+    var idx = this._sentenceIdx;
+    var text = this._sentences[idx];
+
+    // 先停掉之前的音频
+    if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
+    if (this.audio) { this.audio.pause(); this.audio = null; }
+    this.playingKind = 'sent';
+
+    if (sb) { sb.textContent = '⏹ 停止'; sb.style.background = '#dc2626'; }
+
+    // 高亮当前句子卡片
+    this._highlightSentence(idx);
+
+    // 尝试用预生成的 MP3
+    var mp3Path = 'audio/sentences/' + this._unitId + '/' + idx + '.mp3';
+    var audio = new Audio(mp3Path);
+    audio.playbackRate = this.speed;
+    this._sentAudio = audio;
+
+    // 更新进度条
+    audio.addEventListener('timeupdate', function() {
+      if (self.playingKind === 'sent') self._updateSentProgress(audio);
+    });
+    audio.addEventListener('loadedmetadata', function() {
+      if (self.playingKind === 'sent') self._updateSentProgress(audio);
+    });
+
+    audio.addEventListener('ended', function() {
+      self._clearSentenceHighlight(idx);
+      if (self._autoAdvance && self._sentenceIdx < self._sentences.length) {
+        // 自动播放下一句
+        self._playCurrentSentence();
+      } else {
+        self._stopSentAudio();
+      }
+    });
+
+    audio.addEventListener('error', function() {
+      // MP3 不存在，回退到 Web Speech API
+      self._fallbackSpeak(text, idx);
+    });
+
+    audio.play().catch(function() {
+      // 播放失败，回退
+      self._fallbackSpeak(text, idx);
+    });
+
+    this._sentenceIdx = idx + 1;
+  },
+
+  _fallbackSpeak: function(text, idx) {
+    var self = this;
+    var sb = document.getElementById('btn-sent');
+    if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
+    speechSynthesis.cancel();
+    var utt = new SpeechSynthesisUtterance(text);
+    utt.lang = 'en-US'; utt.rate = this.speed;
     utt.onend = function() {
-      self.playingKind = null;
-      var b = document.getElementById('btn-sent');
-      if (b) { b.textContent = '▶ 逐句播放'; b.style.background = 'var(--warn)'; }
+      self._clearSentenceHighlight(idx);
+      if (self._autoAdvance && self._sentenceIdx < self._sentences.length) {
+        self._playCurrentSentence();
+      } else {
+        self._stopSentAudio();
+      }
     };
-    speechSynthesis.cancel(); speechSynthesis.speak(utt);
-    this._sentenceIdx = (this._sentenceIdx + 1) % this._sentences.length;
+    speechSynthesis.speak(utt);
+  },
+
+  _stopSentAudio: function() {
+    if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
+    speechSynthesis.cancel();
+    this.playingKind = null;
+    this._clearAllSentenceHighlights();
+    var sb = document.getElementById('btn-sent');
+    if (sb) { sb.textContent = '▶ 逐句播放'; sb.style.background = 'var(--warn)'; }
+    // 清除进度条
+    var fill = document.getElementById('progFill');
+    if (fill) fill.style.width = '0%';
+    var td = document.getElementById('timeDisplay');
+    if (td) td.textContent = '00:00 / 00:00';
+  },
+
+  _highlightSentence: function(idx) {
+    this._clearAllSentenceHighlights();
+    var cards = document.querySelectorAll('#modContent .di-card');
+    if (cards[idx]) {
+      cards[idx].style.background = 'var(--pri-lt)';
+      cards[idx].style.borderLeftWidth = '6px';
+    }
+  },
+  _clearSentenceHighlight: function(idx) {
+    var cards = document.querySelectorAll('#modContent .di-card');
+    if (cards[idx]) {
+      cards[idx].style.background = '';
+      cards[idx].style.borderLeftWidth = '';
+    }
+  },
+  _clearAllSentenceHighlights: function() {
+    var cards = document.querySelectorAll('#modContent .di-card');
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].style.background = '';
+      cards[i].style.borderLeftWidth = '';
+    }
+  },
+  _updateSentProgress: function(audio) {
+    var pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
+    var fill = document.getElementById('progFill');
+    if (fill) fill.style.width = pct + '%';
+    var cur = this.fmt(audio.currentTime), dur = this.fmt(audio.duration || 0);
+    var td = document.getElementById('timeDisplay');
+    if (td) td.textContent = cur + ' / ' + dur + ' (第' + (this._sentenceIdx) + '/' + this._sentences.length + '句)';
   },
   setSpeed: function(s) { this.speed = s; if (this.audio) this.audio.playbackRate = s; this.render(App.currentUnit); },
   seek: function(e) {
@@ -645,6 +760,86 @@ var ListenMod = {
     document.getElementById('timeDisplay').textContent = cur + ' / ' + dur;
   },
   fmt: function(s) { var m=Math.floor(s/60), sec=Math.floor(s%60); return (m<10?'0'+m:m) + ':' + (sec<10?'0'+sec:sec); },
+  // ---- 键盘快捷键 ----
+  _bindKeys: function() {
+    if (this._keyBound) return;
+    this._keyBound = true;
+    var self = this;
+    document.addEventListener('keydown', function(e) {
+      // 只在听力模块激活时生效，且焦点不在输入框
+      if (App.currentMod !== 'listen') return;
+      var tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea') return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        self._togglePause();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        self._seekRel(-5);
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        self._seekRel(5);
+      }
+    });
+  },
+  _toastTimer: null,
+  _showToast: function(msg) {
+    var old = document.getElementById('kbToast');
+    if (old) old.remove();
+    var el = document.createElement('div');
+    el.id = 'kbToast';
+    el.textContent = msg;
+    el.style.cssText = 'position:fixed;top:80px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.75);color:#fff;padding:8px 24px;border-radius:20px;font-size:14px;z-index:9999;pointer-events:none;animation:fadeIn .2s';
+    document.body.appendChild(el);
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(function(){ el.remove(); }, 800);
+  },
+  _togglePause: function() {
+    if (this.playingKind === 'sent') {
+      if (this._sentAudio && !this._sentAudio.paused) {
+        this._sentAudio.pause();
+        this._showToast('⏸ 逐句暂停');
+      } else if (this._sentAudio && this._sentAudio.paused) {
+        this._sentAudio.play().catch(function(){});
+        this._showToast('▶ 逐句继续');
+      } else {
+        // Web Speech API 回退模式，无法暂停，只能停止
+        speechSynthesis.cancel();
+        this.playingKind = null;
+        var sb = document.getElementById('btn-sent');
+        if (sb) { sb.textContent = '▶ 逐句播放'; sb.style.background = 'var(--warn)'; }
+        this._showToast('⏹ 已停止');
+      }
+      return;
+    }
+    if (!this.audio) { this._showToast('🔇 无音频'); return; }
+    if (this.audio.paused) {
+      this.audio.play().catch(function(){});
+      var btn = document.getElementById('btn-' + this.playingKind);
+      if (btn) this._setBtnState(btn, true);
+      this._showToast('▶ 播放');
+    } else {
+      this.audio.pause();
+      var btn2 = document.getElementById('btn-' + this.playingKind);
+      if (btn2) this._setBtnState(btn2, false);
+      this._showToast('⏸ 暂停');
+    }
+  },
+  _seekRel: function(sec) {
+    // 逐句模式下也能快进快退
+    if (this.playingKind === 'sent' && this._sentAudio) {
+      var a = this._sentAudio;
+      a.currentTime = Math.max(0, Math.min(a.currentTime + sec, a.duration || 0));
+      this._showToast((sec > 0 ? '→ +' : '← ') + Math.abs(sec) + 's');
+      return;
+    }
+    if (!this.audio) { this._showToast('🔇 无音频'); return; }
+    var target = Math.max(0, Math.min(this.audio.currentTime + sec, this.audio.duration || 0));
+    this.audio.currentTime = target;
+    this._showToast((sec > 0 ? '→ +' : '← ') + Math.abs(sec) + 's');
+  },
+
   checkDictation: function() {
     var input = (document.getElementById('dictInput').value || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
     var orig = (App.currentUnit.dialogueEN || []).join(' ').toLowerCase().split(/\s+/).filter(Boolean);
