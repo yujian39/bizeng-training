@@ -147,6 +147,17 @@ body{font-family:"Segoe UI","Microsoft YaHei",sans-serif;font-size:15px;color:va
 .btn-pri{background:var(--pri);color:#fff}
 .btn-suc{background:var(--suc);color:#fff}
 .btn-out{background:var(--card);border:1px solid var(--pri);color:var(--pri)}
+/* ===== Loop Controls ===== */
+.loop-ctl{display:flex;align-items:center;gap:8px;background:var(--card);padding:10px 16px;border-radius:var(--r);box-shadow:var(--sh);margin:12px 0;flex-wrap:wrap}
+.loop-label{font-size:13px;font-weight:600;color:var(--tx2);margin-right:4px}
+.loop-btn{padding:6px 14px;border:1.5px solid var(--bd);background:var(--card);border-radius:20px;cursor:pointer;font-size:13px;font-weight:500;color:var(--tx2);transition:all .15s}
+.loop-btn:hover{border-color:var(--pri);color:var(--pri);background:var(--pri-lt)}
+.loop-btn.active{background:var(--pri);color:#fff;border-color:var(--pri)}
+.loop-status{font-size:12px;color:var(--warn);font-weight:600;margin-left:auto}
+.di-card.loop-active{background:var(--warn-lt)!important;border-left-color:var(--warn)!important;box-shadow:0 0 0 2px var(--warn),var(--sh);animation:loop-pulse 1.5s ease-in-out infinite}
+@keyframes loop-pulse{0%,100%{box-shadow:0 0 0 2px var(--warn),var(--sh)}50%{box-shadow:0 0 0 4px rgba(245,158,11,.3),var(--sh)}}
+.loop-dot{display:inline-block;margin-left:6px;font-size:12px;animation:loop-spin 2s linear infinite}
+@keyframes loop-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 @media(max-width:768px){
   body{font-size:14px}
   #topbar{height:auto;padding:8px 12px;flex-wrap:wrap;gap:6px}
@@ -536,12 +547,19 @@ var ReadMod = {
 var ListenMod = {
   audio: null, speed: 1, mode: 'play', _sentences: [], _sentenceIdx: 0, playingKind: null,
   _sentAudio: null, _autoAdvance: true, _unitId: null,
+  loopMode: 'none', _loopCount: 0, _stopped: false, _loopTimer: null, _highlightIdx: -1, _speakTimeout: null,
+
   render: function(unit) {
     var audioPath = 'audio/' + unit.id + '-en.mp3';
     var zhPath = 'audio/' + unit.id + '-zh.mp3';
     this._sentences = (unit.dialogueEN || []).filter(function(s){ var t = (s||'').trim(); return t.length > 0; });
     this._sentenceIdx = 0;
     this._unitId = unit.id;
+    this._loopCount = 0;
+    this._stopped = false;
+    this._highlightIdx = -1;
+    if (this._loopTimer) { clearTimeout(this._loopTimer); this._loopTimer = null; }
+    if (this._speakTimeout) { clearTimeout(this._speakTimeout); this._speakTimeout = null; }
     if (this.audio) { this.audio.pause(); this.audio = null; }
     if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
     this.playingKind = null;
@@ -557,7 +575,19 @@ var ListenMod = {
       '<span id="timeDisplay">00:00 / 00:00</span>' +
       '<span style="font-size:11px;color:var(--tx2);margin-left:8px">⌨ 空格暂停 ← → 快退/快进</span>' +
       '</div></div>' +
-      '<div style="margin:12px 0"><button class="btn-out" onclick="ListenMod.toggleMode()">切换模式: ' + (this.mode==='play'?'🎧 播放':'✍️ 听写') + '</button></div>';
+
+      // 循环模式控制栏
+      '<div class="loop-ctl">' +
+      '<span class="loop-label">🔁 循环模式:</span>' +
+      '<button class="loop-btn ' + (this.loopMode==='none'?'active':'') + '" onclick="ListenMod.setLoopMode(\'none\')">关闭</button>' +
+      '<button class="loop-btn ' + (this.loopMode==='single'?'active':'') + '" onclick="ListenMod.setLoopMode(\'single\')">🔂 单句循环</button>' +
+      '<button class="loop-btn ' + (this.loopMode==='all'?'active':'') + '" onclick="ListenMod.setLoopMode(\'all\')">🔁 场景循环</button>' +
+      '<span class="loop-status" id="loopStatus"></span>' +
+      '</div>' +
+
+      '<div style="margin:12px 0"><button class="btn-out" onclick="ListenMod.toggleMode()">切换模式: ' + (this.mode==='play'?'🎧 播放':'✍️ 听写') + '</button>' +
+      (this.loopMode!=='none' ? ' <button class="btn-out" style="background:var(--err);color:#fff;border-color:var(--err)" onclick="ListenMod.stopLoop()">⏹ 停止播放</button>' : '') +
+      '</div>';
 
     if (this.mode === 'dictation') {
       html += '<div class="dict"><div class="sent-en">🎧 点击播放，听写英文内容：</div><textarea id="dictInput" placeholder="在这里输入你听到的英文..."></textarea><button class="btn btn-pri" style="margin-top:8px" onclick="ListenMod.checkDictation()">✅ 提交对比</button><div class="cmp" id="dictResult"></div></div>';
@@ -565,14 +595,58 @@ var ListenMod = {
       var lines = unit.dialogueEN || [];
       for (var i = 0; i < lines.length; i++) {
         var role = i%2===0?'A':'B';
-        html += '<div class="di-card role-' + role + '" style="cursor:pointer" onclick="ListenMod.playSentence(' + i + ')"><div class="role-tag">' + (role==='A'?unit.roles.A:unit.roles.B) + '</div><div class="en-txt">' + lines[i] + '</div></div>';
+        var isActive = this._highlightIdx === i;
+        html += '<div class="di-card role-' + role + ' ' + (isActive?'loop-active':'') + '" data-sidx="' + i + '" style="cursor:pointer" onclick="ListenMod.playSentence(' + i + ')"><div class="role-tag">' + (role==='A'?unit.roles.A:unit.roles.B) + (isActive?'<span class="loop-dot">🔁</span>':'') + '</div><div class="en-txt">' + lines[i] + '</div></div>';
       }
     }
     document.getElementById('modContent').innerHTML = html;
     this._bindKeys();
+    this._updateLoopStatus();
   },
 
-  toggleMode: function() { this.mode = this.mode==='play'?'dictation':'play'; this.render(App.currentUnit); },
+  // 循环模式控制
+  setLoopMode: function(mode) {
+    this.loopMode = mode;
+    this._loopCount = 0;
+    this._autoAdvance = (mode !== 'none');
+    this.render(App.currentUnit);
+  },
+
+  stopLoop: function() {
+    this._stopped = true;
+    this._autoAdvance = true;
+    if (this._loopTimer) { clearTimeout(this._loopTimer); this._loopTimer = null; }
+    if (this._speakTimeout) { clearTimeout(this._speakTimeout); this._speakTimeout = null; }
+    if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
+    speechSynthesis.cancel();
+    this.playingKind = null;
+    this._highlightIdx = -1;
+    this._loopCount = 0;
+    this._clearAllSentenceHighlights();
+    var sb = document.getElementById('btn-sent');
+    if (sb) { sb.textContent = '▶ 逐句播放'; sb.style.background = 'var(--warn)'; }
+    this._updateLoopStatus();
+  },
+
+  _updateLoopStatus: function() {
+    var el = document.getElementById('loopStatus');
+    if (!el) return;
+    if (this.loopMode === 'none') {
+      el.textContent = '';
+    } else if (this.loopMode === 'single' && this._highlightIdx >= 0) {
+      el.textContent = '正在循环第 ' + (this._highlightIdx + 1) + ' 句 (第 ' + this._loopCount + ' 遍)';
+    } else if (this.loopMode === 'all' && this._highlightIdx >= 0) {
+      el.textContent = '正在播放第 ' + (this._highlightIdx + 1) + '/' + this._sentences.length + ' 句';
+    } else {
+      el.textContent = this.loopMode === 'single' ? '🔂 已开启单句循环' : '🔁 已开启场景循环';
+    }
+  },
+
+  toggleMode: function() {
+    this.stopLoop();
+    this.mode = this.mode==='play'?'dictation':'play';
+    this.render(App.currentUnit);
+  },
 
   _playById: function(id) {
     var btn = document.getElementById(id);
@@ -639,8 +713,12 @@ var ListenMod = {
       this._stopSentAudio();
       return;
     }
-    if (idx != null) this._sentenceIdx = idx;
+    if (idx != null) {
+      this._sentenceIdx = idx;
+      this._loopCount = 0;
+    }
     if (this._sentenceIdx >= this._sentences.length) this._sentenceIdx = 0;
+    this._stopped = false;
     this._playCurrentSentence();
   },
 
@@ -653,12 +731,15 @@ var ListenMod = {
     // 先停掉之前的音频
     if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
     if (this.audio) { this.audio.pause(); this.audio = null; }
+    speechSynthesis.cancel();
     this.playingKind = 'sent';
 
     if (sb) { sb.textContent = '⏹ 停止'; sb.style.background = '#dc2626'; }
 
     // 高亮当前句子卡片
+    this._highlightIdx = idx;
     this._highlightSentence(idx);
+    this._updateLoopStatus();
 
     // 尝试用预生成的 MP3
     var mp3Path = 'audio/sentences/' + this._unitId + '/' + idx + '.mp3';
@@ -674,27 +755,73 @@ var ListenMod = {
       if (self.playingKind === 'sent') self._updateSentProgress(audio);
     });
 
+    var ended = false; // 防止重复触发
     audio.addEventListener('ended', function() {
-      self._clearSentenceHighlight(idx);
-      if (self._autoAdvance && self._sentenceIdx < self._sentences.length) {
-        // 自动播放下一句
-        self._playCurrentSentence();
-      } else {
-        self._stopSentAudio();
-      }
+      if (ended) return; ended = true;
+      self._onSentenceEnd(idx);
     });
 
+    var playResult = audio.play();
+    if (playResult && playResult.catch) {
+      playResult.catch(function() {
+        // 播放失败（移动端自动播放限制或文件问题），回退到 Web Speech API
+        if (ended) return; ended = true;
+        self._fallbackSpeak(text, idx);
+      });
+    }
+
+    // MP3加载出错时也回退（但只回退一次）
     audio.addEventListener('error', function() {
-      // MP3 不存在，回退到 Web Speech API
+      if (ended) return; ended = true;
       self._fallbackSpeak(text, idx);
     });
 
-    audio.play().catch(function() {
-      // 播放失败，回退
-      self._fallbackSpeak(text, idx);
-    });
+    // 非循环模式下，手动推进到下一句
+    if (this.loopMode === 'none') {
+      this._sentenceIdx = idx + 1;
+    }
+  },
 
-    this._sentenceIdx = idx + 1;
+  _onSentenceEnd: function(idx) {
+    var self = this;
+    if (this._stopped) return;
+    this._clearSentenceHighlight(idx);
+
+    if (this.loopMode === 'single') {
+      // 单句循环：重复当前句
+      this._loopCount++;
+      this._updateLoopStatus();
+      this._loopTimer = setTimeout(function() {
+        if (!self._stopped) {
+          self._sentenceIdx = idx;
+          self._playCurrentSentence();
+        }
+      }, 600);
+    } else if (this.loopMode === 'all') {
+      // 场景循环：播放下一句，到末尾后从头开始
+      var nextIdx = idx + 1;
+      if (nextIdx >= this._sentences.length) {
+        nextIdx = 0;
+        this._loopTimer = setTimeout(function() {
+          if (!self._stopped) {
+            self._sentenceIdx = 0;
+            self._playCurrentSentence();
+          }
+        }, 1200);
+      } else {
+        this._sentenceIdx = nextIdx;
+        this._loopTimer = setTimeout(function() {
+          if (!self._stopped) self._playCurrentSentence();
+        }, 600);
+      }
+    } else {
+      // none 模式：自动播放下一句（原有行为）
+      if (this._sentenceIdx < this._sentences.length) {
+        this._playCurrentSentence();
+      } else {
+        this._stopSentAudio();
+      }
+    }
   },
 
   _fallbackSpeak: function(text, idx) {
@@ -702,53 +829,74 @@ var ListenMod = {
     var sb = document.getElementById('btn-sent');
     if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
     speechSynthesis.cancel();
+
+    // 预估朗读时长（每分钟约150词），加上额外缓冲
+    var wordCount = text.split(/\s+/).length;
+    var estimatedMs = Math.max((wordCount / 150) * 60000 / this.speed, 2000);
+
+    var finished = false;
+    var finish = function() {
+      if (finished) return;
+      finished = true;
+      if (self._speakTimeout) { clearTimeout(self._speakTimeout); self._speakTimeout = null; }
+      self._onSentenceEnd(idx);
+    };
+
     var utt = new SpeechSynthesisUtterance(text);
     utt.lang = 'en-US'; utt.rate = this.speed;
-    utt.onend = function() {
-      self._clearSentenceHighlight(idx);
-      if (self._autoAdvance && self._sentenceIdx < self._sentences.length) {
-        self._playCurrentSentence();
-      } else {
-        self._stopSentAudio();
-      }
-    };
+    utt.onend = finish;
+    utt.onerror = finish; // 出错时也要继续，防止卡住
+
+    // 超时保护：手机上 onend 经常不触发，超时后强制继续
+    if (this._speakTimeout) { clearTimeout(this._speakTimeout); }
+    this._speakTimeout = setTimeout(finish, estimatedMs + 2000);
+
     speechSynthesis.speak(utt);
   },
 
   _stopSentAudio: function() {
+    this._stopped = true;
+    if (this._loopTimer) { clearTimeout(this._loopTimer); this._loopTimer = null; }
+    if (this._speakTimeout) { clearTimeout(this._speakTimeout); this._speakTimeout = null; }
     if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
     speechSynthesis.cancel();
     this.playingKind = null;
+    this._highlightIdx = -1;
     this._clearAllSentenceHighlights();
     var sb = document.getElementById('btn-sent');
     if (sb) { sb.textContent = '▶ 逐句播放'; sb.style.background = 'var(--warn)'; }
-    // 清除进度条
     var fill = document.getElementById('progFill');
     if (fill) fill.style.width = '0%';
     var td = document.getElementById('timeDisplay');
     if (td) td.textContent = '00:00 / 00:00';
+    this._updateLoopStatus();
   },
 
   _highlightSentence: function(idx) {
     this._clearAllSentenceHighlights();
     var cards = document.querySelectorAll('#modContent .di-card');
     if (cards[idx]) {
-      cards[idx].style.background = 'var(--pri-lt)';
-      cards[idx].style.borderLeftWidth = '6px';
+      cards[idx].classList.add('loop-active');
+      var tag = cards[idx].querySelector('.role-tag');
+      if (tag && !tag.querySelector('.loop-dot')) {
+        tag.insertAdjacentHTML('beforeend', '<span class="loop-dot">🔁</span>');
+      }
     }
   },
   _clearSentenceHighlight: function(idx) {
     var cards = document.querySelectorAll('#modContent .di-card');
     if (cards[idx]) {
-      cards[idx].style.background = '';
-      cards[idx].style.borderLeftWidth = '';
+      cards[idx].classList.remove('loop-active');
+      var dot = cards[idx].querySelector('.loop-dot');
+      if (dot) dot.remove();
     }
   },
   _clearAllSentenceHighlights: function() {
     var cards = document.querySelectorAll('#modContent .di-card');
     for (var i = 0; i < cards.length; i++) {
-      cards[i].style.background = '';
-      cards[i].style.borderLeftWidth = '';
+      cards[i].classList.remove('loop-active');
+      var dot = cards[i].querySelector('.loop-dot');
+      if (dot) dot.remove();
     }
   },
   _updateSentProgress: function(audio) {
@@ -757,7 +905,8 @@ var ListenMod = {
     if (fill) fill.style.width = pct + '%';
     var cur = this.fmt(audio.currentTime), dur = this.fmt(audio.duration || 0);
     var td = document.getElementById('timeDisplay');
-    if (td) td.textContent = cur + ' / ' + dur + ' (第' + (this._sentenceIdx) + '/' + this._sentences.length + '句)';
+    var loopInfo = this.loopMode === 'single' ? ' 🔂第' + this._loopCount + '遍' : (this.loopMode === 'all' ? ' 🔁' : '');
+    if (td) td.textContent = cur + ' / ' + dur + ' (第' + (this._sentenceIdx + 1) + '/' + this._sentences.length + '句' + loopInfo + ')';
   },
   setSpeed: function(s) { this.speed = s; if (this.audio) this.audio.playbackRate = s; this.render(App.currentUnit); },
   seek: function(e) {
@@ -817,11 +966,8 @@ var ListenMod = {
         this._sentAudio.play().catch(function(){});
         this._showToast('▶ 逐句继续');
       } else {
-        // Web Speech API 回退模式，无法暂停，只能停止
         speechSynthesis.cancel();
-        this.playingKind = null;
-        var sb = document.getElementById('btn-sent');
-        if (sb) { sb.textContent = '▶ 逐句播放'; sb.style.background = 'var(--warn)'; }
+        this._stopSentAudio();
         this._showToast('⏹ 已停止');
       }
       return;
@@ -840,7 +986,6 @@ var ListenMod = {
     }
   },
   _seekRel: function(sec) {
-    // 逐句模式下也能快进快退
     if (this.playingKind === 'sent' && this._sentAudio) {
       var a = this._sentAudio;
       a.currentTime = Math.max(0, Math.min(a.currentTime + sec, a.duration || 0));
