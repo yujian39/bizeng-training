@@ -549,6 +549,16 @@ var ListenMod = {
   _sentAudio: null, _autoAdvance: true, _unitId: null,
   loopMode: 'none', _loopCount: 0, _stopped: false, _loopTimer: null, _highlightIdx: -1, _speakTimeout: null, _endedTimer: null,
 
+  _dbg: function(msg) {
+    var el = document.getElementById('dbgLog');
+    if (!el) return;
+    var t = new Date().toLocaleTimeString();
+    el.innerHTML = '<div>[' + t + '] ' + msg + '</div>' + el.innerHTML;
+    // 最多保留20条
+    var items = el.querySelectorAll('div');
+    for (var i = 20; i < items.length; i++) items[i].remove();
+  },
+
   render: function(unit) {
     var audioPath = 'audio/' + unit.id + '-en.mp3';
     var zhPath = 'audio/' + unit.id + '-zh.mp3';
@@ -600,13 +610,16 @@ var ListenMod = {
         html += '<div class="di-card role-' + role + ' ' + (isActive?'loop-active':'') + '" data-sidx="' + i + '" style="cursor:pointer" onclick="ListenMod.playSentence(' + i + ')"><div class="role-tag">' + (role==='A'?unit.roles.A:unit.roles.B) + (isActive?'<span class="loop-dot">🔁</span>':'') + '</div><div class="en-txt">' + lines[i] + '</div></div>';
       }
     }
-    document.getElementById('modContent').innerHTML = html;
+    document.getElementById('modContent').innerHTML = html +
+      '<div id="dbgPanel" style="margin-top:16px;background:#1e293b;color:#22d3ee;padding:12px;border-radius:8px;font-family:monospace;font-size:12px;max-height:200px;overflow-y:auto"><div style="color:#94a3b8;margin-bottom:4px">📱 调试日志 (点击句子后观察这里)</div><div id="dbgLog"></div></div>';
+    this._dbg('听力模块加载完成 | 句数:' + this._sentences.length + ' | 模式:' + this.loopMode);
     this._bindKeys();
     this._updateLoopStatus();
   },
 
   // 循环模式控制
   setLoopMode: function(mode) {
+    this._dbg('切换循环模式: ' + this.loopMode + ' → ' + mode);
     this.loopMode = mode;
     this._loopCount = 0;
     this._autoAdvance = (mode !== 'none');
@@ -710,6 +723,7 @@ var ListenMod = {
 
   playSentence: function(idx) {
     var sb = document.getElementById('btn-sent');
+    this._dbg('点击句子 idx=' + idx + ' | 当前playingKind=' + this.playingKind + ' | loopMode=' + this.loopMode);
     // 如果正在播放逐句，停止
     if (this.playingKind === 'sent') {
       this._stopSentAudio();
@@ -729,6 +743,7 @@ var ListenMod = {
     var sb = document.getElementById('btn-sent');
     var idx = this._sentenceIdx;
     var text = this._sentences[idx];
+    this._dbg('▶ 开始播放第' + idx + '句: "' + (text||'').substring(0,30) + '..."');
 
     // 先停掉之前的音频和定时器
     if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
@@ -746,6 +761,7 @@ var ListenMod = {
 
     // 尝试用预生成的 MP3
     var mp3Path = 'audio/sentences/' + this._unitId + '/' + idx + '.mp3';
+    this._dbg('MP3路径: ' + mp3Path);
     var audio = new Audio(mp3Path);
     audio.playbackRate = this.speed;
     this._sentAudio = audio;
@@ -763,18 +779,21 @@ var ListenMod = {
     var moveToNext = function(source) {
       if (handled) return;
       handled = true;
+      self._dbg('→ moveToNext 来源:' + source);
       if (self._endedTimer) { clearTimeout(self._endedTimer); self._endedTimer = null; }
       self._onSentenceEnd(idx);
     };
 
     // 先注册 error 监听，再 play（防止手机上事件丢失）
-    audio.addEventListener('ended', function() { moveToNext('ended'); });
-    audio.addEventListener('error', function() { moveToNext('error'); });
+    audio.addEventListener('ended', function() { self._dbg('audio ended事件'); moveToNext('ended'); });
+    audio.addEventListener('error', function(e) { self._dbg('audio error事件: ' + (e.message||'unknown')); moveToNext('error'); });
 
     var playResult = audio.play();
     if (playResult && playResult.catch) {
-      playResult.catch(function() {
-        // play() 被拒绝（移动端自动播放限制），用语音合成兜底
+      playResult.then(function() {
+        self._dbg('audio.play() 成功');
+      }).catch(function(err) {
+        self._dbg('audio.play() 被拒绝: ' + (err&&err.name||err));
         moveToNext('play-catch');
       });
     }
@@ -783,7 +802,8 @@ var ListenMod = {
     // 超时后也强制进入下一句
     var duration = audio.duration || 0;
     var safeMs = duration > 0 ? (duration / this.speed) * 1000 + 3000 : 8000;
-    this._endedTimer = setTimeout(function() { moveToNext('safety-timeout'); }, safeMs);
+    this._dbg('安全网超时: ' + (safeMs/1000).toFixed(1) + 's (duration=' + duration + ')');
+    this._endedTimer = setTimeout(function() { self._dbg('⏰ 安全网超时触发!'); moveToNext('safety-timeout'); }, safeMs);
 
     // 非循环模式下，手动推进到下一句
     if (this.loopMode === 'none') {
@@ -793,6 +813,7 @@ var ListenMod = {
 
   _onSentenceEnd: function(idx) {
     var self = this;
+    this._dbg('_onSentenceEnd(' + idx + ') | stopped=' + this._stopped + ' | loopMode=' + this.loopMode);
     if (this._stopped) return;
     this._clearSentenceHighlight(idx);
 
