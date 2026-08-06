@@ -547,7 +547,7 @@ var ReadMod = {
 var ListenMod = {
   audio: null, speed: 1, mode: 'play', _sentences: [], _sentenceIdx: 0, playingKind: null,
   _sentAudio: null, _autoAdvance: true, _unitId: null,
-  loopMode: 'none', _loopCount: 0, _stopped: false, _loopTimer: null, _highlightIdx: -1, _speakTimeout: null,
+  loopMode: 'none', _loopCount: 0, _stopped: false, _loopTimer: null, _highlightIdx: -1, _speakTimeout: null, _endedTimer: null,
 
   render: function(unit) {
     var audioPath = 'audio/' + unit.id + '-en.mp3';
@@ -560,6 +560,7 @@ var ListenMod = {
     this._highlightIdx = -1;
     if (this._loopTimer) { clearTimeout(this._loopTimer); this._loopTimer = null; }
     if (this._speakTimeout) { clearTimeout(this._speakTimeout); this._speakTimeout = null; }
+    if (this._endedTimer) { clearTimeout(this._endedTimer); this._endedTimer = null; }
     if (this.audio) { this.audio.pause(); this.audio = null; }
     if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
     this.playingKind = null;
@@ -617,6 +618,7 @@ var ListenMod = {
     this._autoAdvance = true;
     if (this._loopTimer) { clearTimeout(this._loopTimer); this._loopTimer = null; }
     if (this._speakTimeout) { clearTimeout(this._speakTimeout); this._speakTimeout = null; }
+    if (this._endedTimer) { clearTimeout(this._endedTimer); this._endedTimer = null; }
     if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
     speechSynthesis.cancel();
     this.playingKind = null;
@@ -728,9 +730,10 @@ var ListenMod = {
     var idx = this._sentenceIdx;
     var text = this._sentences[idx];
 
-    // 先停掉之前的音频
+    // 先停掉之前的音频和定时器
     if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
     if (this.audio) { this.audio.pause(); this.audio = null; }
+    if (this._endedTimer) { clearTimeout(this._endedTimer); this._endedTimer = null; }
     speechSynthesis.cancel();
     this.playingKind = 'sent';
 
@@ -755,26 +758,32 @@ var ListenMod = {
       if (self.playingKind === 'sent') self._updateSentProgress(audio);
     });
 
-    var ended = false; // 防止重复触发
-    audio.addEventListener('ended', function() {
-      if (ended) return; ended = true;
+    // 状态标志：确保回调只触发一次
+    var handled = false;
+    var moveToNext = function(source) {
+      if (handled) return;
+      handled = true;
+      if (self._endedTimer) { clearTimeout(self._endedTimer); self._endedTimer = null; }
       self._onSentenceEnd(idx);
-    });
+    };
+
+    // 先注册 error 监听，再 play（防止手机上事件丢失）
+    audio.addEventListener('ended', function() { moveToNext('ended'); });
+    audio.addEventListener('error', function() { moveToNext('error'); });
 
     var playResult = audio.play();
     if (playResult && playResult.catch) {
       playResult.catch(function() {
-        // 播放失败（移动端自动播放限制或文件问题），回退到 Web Speech API
-        if (ended) return; ended = true;
-        self._fallbackSpeak(text, idx);
+        // play() 被拒绝（移动端自动播放限制），用语音合成兜底
+        moveToNext('play-catch');
       });
     }
 
-    // MP3加载出错时也回退（但只回退一次）
-    audio.addEventListener('error', function() {
-      if (ended) return; ended = true;
-      self._fallbackSpeak(text, idx);
-    });
+    // 安全网：即使 play() 成功但 ended 事件从不触发（手机常见 bug），
+    // 超时后也强制进入下一句
+    var duration = audio.duration || 0;
+    var safeMs = duration > 0 ? (duration / this.speed) * 1000 + 3000 : 8000;
+    this._endedTimer = setTimeout(function() { moveToNext('safety-timeout'); }, safeMs);
 
     // 非循环模式下，手动推进到下一句
     if (this.loopMode === 'none') {
@@ -858,6 +867,7 @@ var ListenMod = {
     this._stopped = true;
     if (this._loopTimer) { clearTimeout(this._loopTimer); this._loopTimer = null; }
     if (this._speakTimeout) { clearTimeout(this._speakTimeout); this._speakTimeout = null; }
+    if (this._endedTimer) { clearTimeout(this._endedTimer); this._endedTimer = null; }
     if (this._sentAudio) { this._sentAudio.pause(); this._sentAudio = null; }
     speechSynthesis.cancel();
     this.playingKind = null;
