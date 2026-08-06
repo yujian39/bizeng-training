@@ -723,12 +723,12 @@ var ListenMod = {
 
   playSentence: function(idx) {
     var sb = document.getElementById('btn-sent');
-    this._dbg('点击句子 idx=' + idx + ' | 当前playingKind=' + this.playingKind + ' | loopMode=' + this.loopMode);
-    // 如果正在播放逐句，停止
+    // 如果正在播放，先停止
     if (this.playingKind === 'sent') {
       this._stopSentAudio();
       return;
     }
+    // 循环模式下，点任意句子直接启动循环（不用先点"逐句播放"）
     if (idx != null) {
       this._sentenceIdx = idx;
       this._loopCount = 0;
